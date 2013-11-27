@@ -95,7 +95,7 @@ type IRCMessager struct {
 func (i *IRCMessager) callback(cb func(*irc.Event)) func(*irc.Event) {
 	return func(event *irc.Event) {
 		log.Println("[irc]", event.Code, event, event.Message, event.Arguments, event.Nick)
-		if event.Arguments[0] == i.Channel {
+		if len(event.Arguments) == 0 || event.Arguments[0] == i.Channel {
 			cb(event)
 		}
 	}
@@ -115,6 +115,10 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 	conn.AddCallback("PART", i.callback(func(event *irc.Event) {
 		contents := fmt.Sprintf("%s: irc-part", i.Nick)
 		messages <- Message{i, event.Nick, event.Arguments[0], contents, time.Now()}
+	}))
+	conn.AddCallback("QUIT", i.callback(func(event *irc.Event) {
+		contents := fmt.Sprintf("%s: irc-quit %s", i.Nick, event.Message)
+		messages <- Message{i, event.Nick, i.Channel, contents, time.Now()}
 	}))
 
 	log.Println("[irc ] connecting to", i.Server, i.Channel)
