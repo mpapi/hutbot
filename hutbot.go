@@ -38,7 +38,7 @@ var botTLS = flag.Bool("tls", true, "whether to use TLS")
 // Messages are created by events (e.g. someone speaking in IRC) and dispatched
 // to responders.
 type Message struct {
-	Message  Messager
+	Messager Messager
 	Sender   string
 	Channel  string
 	Contents string
@@ -244,15 +244,20 @@ func basepaths(name string, missing bool) []string {
 		// Otherwise, look for executables in the dir.
 		result := make([]string, 0)
 		for _, entry := range entries {
-			if !entry.IsDir() && entry.Mode()&0111 != 0 {
+			if !entry.IsDir() && isExec(entry) {
 				result = append(result, path+"/"+entry.Name())
 			}
 		}
 		return result
-	} else if info.Mode()&0111 != 0 {
+	} else if isExec(info) {
 		return []string{path}
 	}
 	return []string{}
+}
+
+// Is the given file executable by *someone*?
+func isExec(f os.FileInfo) bool {
+	return (f.Mode()&0111 != 0)
 }
 
 // Run the script at `path`, passing it `stdin` and using environment vars
@@ -320,11 +325,11 @@ func StartResponder(r Responder, responseChan chan<- Response) chan<- Message {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	flag.Parse()
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] server:port channel\n", os.Args[0])
 		flag.PrintDefaults()
 	}
+	flag.Parse()
 	if len(flag.Args()) != 2 {
 		flag.Usage()
 		return
