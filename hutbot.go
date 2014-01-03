@@ -244,15 +244,20 @@ func basepaths(name string, missing bool) []string {
 		// Otherwise, look for executables in the dir.
 		result := make([]string, 0)
 		for _, entry := range entries {
-			if !entry.IsDir() && entry.Mode()&0111 != 0 {
+			if !entry.IsDir() && isExec(entry) {
 				result = append(result, path+"/"+entry.Name())
 			}
 		}
 		return result
-	} else if info.Mode()&0111 != 0 {
+	} else if isExec(info) {
 		return []string{path}
 	}
 	return []string{}
+}
+
+// Is the given file executable by *someone*?
+func isExec(f os.FileInfo) bool {
+	return (f.Mode()&0111 != 0)
 }
 
 // Run the script at `path`, passing it `stdin` and using environment vars
