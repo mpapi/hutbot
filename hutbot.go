@@ -38,7 +38,7 @@ var botTLS = flag.Bool("tls", true, "whether to use TLS")
 // Messages are created by events (e.g. someone speaking in IRC) and dispatched
 // to responders.
 type Message struct {
-	Message  Messager
+	Messager Messager
 	Sender   string
 	Channel  string
 	Contents string
