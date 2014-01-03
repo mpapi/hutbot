@@ -325,11 +325,11 @@ func StartResponder(r Responder, responseChan chan<- Response) chan<- Message {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	flag.Parse()
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] server:port channel\n", os.Args[0])
 		flag.PrintDefaults()
 	}
+	flag.Parse()
 	if len(flag.Args()) != 2 {
 		flag.Usage()
 		return
