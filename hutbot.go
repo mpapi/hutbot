@@ -137,8 +137,13 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 		if len(strings.TrimSpace(response.Contents)) <= 0 {
 			continue
 		}
+
+		target := response.Target
+		if target == "" {
+			target = i.Channel
+		}
 		for _, line := range strings.Split(response.Contents, "\n") {
-			conn.Privmsg(i.Channel, line)
+			conn.Privmsg(target, line)
 			time.Sleep(25 * time.Millisecond)
 		}
 	}
@@ -165,7 +170,7 @@ func (p *PeriodicScript) Process(messages <-chan Message, responses chan<- Respo
 	}
 
 	runScripts := func(dir string) {
-		for _, path := range paths(dir, false, false) {
+		for _, path := range paths(dir) {
 			if out, err := execute(path, "", env); err == nil {
 				contents := strings.TrimRight(string(out), " \t\r\n")
 				responses <- Response{p, nil, contents, "", time.Now()}
@@ -199,24 +204,7 @@ type CommandScript struct{}
 // * If `name` is an executable script, include it.
 // * If `name` is a directory, include any executable scripts from its
 //   immediate children.
-// * If `all` is true, include the ".all" file (or the scripts in a ".all"
-//   directory) if it exists.
-// * If `missing` is true, include the ".missing" file (or the scripts in a
-//   ".missing" directory) if it exists.
-func paths(name string, all bool, missing bool) []string {
-	// Look for the named script or directory.
-	result := basepaths(name, missing)
-
-	// Append .all if necessary (whether it's a script or directory).
-	if all {
-		for _, path := range basepaths(".all", false) {
-			result = append(result, path)
-		}
-	}
-	return result
-}
-
-func basepaths(name string, missing bool) []string {
+func paths(name string) []string {
 	// If there's no name, we're done.
 	if len(strings.TrimSpace(name)) == 0 {
 		return []string{}
@@ -225,15 +213,10 @@ func basepaths(name string, missing bool) []string {
 	path := "./" + name
 	info, err := os.Stat(path)
 
-	// If the path doesn't exist, check for .missing. Otherwise,
-	// if it's a directory, inspect its contents. Otherwise, if it's
-	// executable, return it.
+	// If the path doesn't exist, punt. Otherwise, if it's a directory, inspect
+	// its contents. Otherwise, if it's executable, return it.
 	if err != nil {
-		if !missing {
-			return []string{}
-		} else {
-			return basepaths(".missing", false)
-		}
+		return []string{}
 	} else if info.IsDir() {
 		entries, err := ioutil.ReadDir(path)
 
@@ -270,17 +253,22 @@ func execute(path string, stdin string, env []string) ([]byte, error) {
 	return cmd.Output()
 }
 
+type PathAndTarget struct {
+	Path   string
+	Target string
+}
+
 func (c *CommandScript) Process(messages <-chan Message, responses chan<- Response) {
-	pattern := regexp.MustCompile(fmt.Sprintf(`%s:\s*([^. \t\r\n]\S*)(\s(.+))?`, *botName))
+	pattern := regexp.MustCompile(
+		fmt.Sprintf(`%s:\s*([^. \t\r\n]\S*)(\s(.+))?`, *botName))
 
 	for message := range messages {
 		var command, args string
+		commandFound := false
+
 		match := pattern.FindStringSubmatch(message.Contents)
-		if match == nil || len(match) != 4 {
-			// This ensures that we run .all if we didn't get a command.
-			command = ""
-			args = ""
-		} else {
+		if match != nil && len(match) == 4 {
+			commandFound = true
 			command = match[1]
 			args = match[3]
 		}
@@ -296,16 +284,34 @@ func (c *CommandScript) Process(messages <-chan Message, responses chan<- Respon
 			fmt.Sprintf("HUTBOT_MESSAGE=%s", message.Contents),
 		}
 
-		for _, path := range paths(command, true, true) {
-			if out, err := execute(path, args, env); err == nil {
+		var pts []PathAndTarget
+		if commandFound {
+			pts = appendPaths(pts, paths(command), "")
+			pts = appendPaths(pts, paths("private/"+command), message.Sender)
+			if len(pts) == 0 {
+				pts = appendPaths(pts, paths(".missing"), "")
+			}
+		}
+		pts = appendPaths(pts, paths(".all"), "")
+
+		for _, pt := range pts {
+			if out, err := execute(pt.Path, args, env); err == nil {
 				contents := strings.TrimRight(string(out), " \t\r\n")
-				responses <- Response{c, &message, contents, "", time.Now()}
+				responses <- Response{c, &message, contents, pt.Target, time.Now()}
 			} else {
-				contents := fmt.Sprintf("error: %s %s", path, err)
+				contents := fmt.Sprintf("error: %s %s", pt.Path, err)
 				responses <- Response{c, &message, contents, "", time.Now()}
 			}
 		}
 	}
+}
+
+func appendPaths(pts []PathAndTarget, paths []string, target string) []PathAndTarget {
+	result := pts[:]
+	for _, path := range paths {
+		result = append(result, PathAndTarget{path, target})
+	}
+	return result
 }
 
 // StartMessager runs the messager in a goroutine and allocates a response
