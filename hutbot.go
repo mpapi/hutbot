@@ -51,6 +51,7 @@ type Response struct {
 	Responder Responder
 	Message   *Message
 	Contents  string
+	Target    string // nickname for target, if empty, defaults to channel
 	Created   time.Time
 }
 
@@ -167,10 +168,10 @@ func (p *PeriodicScript) Process(messages <-chan Message, responses chan<- Respo
 		for _, path := range paths(dir, false, false) {
 			if out, err := execute(path, "", env); err == nil {
 				contents := strings.TrimRight(string(out), " \t\r\n")
-				responses <- Response{p, nil, contents, time.Now()}
+				responses <- Response{p, nil, contents, "", time.Now()}
 			} else {
 				contents := fmt.Sprintf("error: %s %s", path, err)
-				responses <- Response{p, nil, contents, time.Now()}
+				responses <- Response{p, nil, contents, "", time.Now()}
 			}
 		}
 	}
@@ -298,10 +299,10 @@ func (c *CommandScript) Process(messages <-chan Message, responses chan<- Respon
 		for _, path := range paths(command, true, true) {
 			if out, err := execute(path, args, env); err == nil {
 				contents := strings.TrimRight(string(out), " \t\r\n")
-				responses <- Response{c, &message, contents, time.Now()}
+				responses <- Response{c, &message, contents, "", time.Now()}
 			} else {
 				contents := fmt.Sprintf("error: %s %s", path, err)
-				responses <- Response{c, &message, contents, time.Now()}
+				responses <- Response{c, &message, contents, "", time.Now()}
 			}
 		}
 	}
