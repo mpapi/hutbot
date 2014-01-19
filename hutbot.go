@@ -235,6 +235,7 @@ func (p *PeriodicScript) Process(messages <-chan Message, responses chan<- Respo
 	env := []string{
 		fmt.Sprintf("HUTBOT_BOT=%s", *botName),
 		fmt.Sprintf("HUTBOT_DIR=%s", wd),
+		"HUTBOT_EVENT=periodic",
 	}
 
 	runScripts := func(dir string) {
@@ -342,6 +343,7 @@ func (c *CommandScript) Process(messages <-chan Message, responses chan<- Respon
 		}
 		wd, _ := os.Getwd()
 		env := []string{
+			"HUTBOT_EVENT=command",
 			fmt.Sprintf("HUTBOT_SENDER=%s", message.Sender),
 			fmt.Sprintf("HUTBOT_CHANNEL=%s", message.Channel),
 			fmt.Sprintf("HUTBOT_CREATED=%d", message.Created.Unix()),
