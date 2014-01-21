@@ -152,6 +152,8 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 	conn.UseTLS = i.UseTLS
 	i.Connect(conn)
 
+	limiter := NewRateLimiter(1, 5)
+	go limiter.Run()
 
 	for response := range responses {
 		if response.Empty() {
@@ -163,8 +165,74 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 			target = i.Channel
 		}
 		for _, line := range strings.Split(response.Contents, "\n") {
+			limiter.Send(1)
 			conn.Privmsg(target, line)
-			time.Sleep(25 * time.Millisecond)
+		}
+	}
+}
+
+// Rate-limits message sending by allocating capacity that drains when messages
+// are sent and refills slowly over time, blocking until it's sufficiently
+// refilled when empty.
+//
+// It can be used with any type of message cost -- messages per second, bytes
+// per second, etc. -- depending on the values passed to `.Send`.
+type RateLimiter struct {
+	RefillRate int
+	MaxFill    int
+	sendchan   chan int
+	waitchan   chan int
+	level      int
+}
+
+// Creates a rate limiter, where `refillRate` is the amount of fill per second
+// (in bytes, messages, etc.), and `maxFill` is the amount at which the limiter
+// stops filling.
+func NewRateLimiter(refillrate int, maxfill int) *RateLimiter {
+	return &RateLimiter{
+		RefillRate: refillrate,
+		MaxFill:    maxfill,
+		sendchan:   make(chan int),
+		waitchan:   make(chan int),
+		level:      maxfill,
+	}
+}
+
+// Requests to send a message of a certain size or cost, and blocks until we're
+// allowed.
+func (r *RateLimiter) Send(amount int) int {
+	r.sendchan <- amount
+	return <-r.waitchan
+}
+
+func (r *RateLimiter) refill() {
+	r.level += r.RefillRate
+	if r.level > r.MaxFill {
+		r.level = r.MaxFill
+	}
+}
+
+// Processes requests to send messages.
+func (r *RateLimiter) Run() {
+	ticks := time.Tick(time.Second)
+	for {
+		if r.level <= 0 {
+			// If we're "empty", don't take requests (thereby blocking the
+			// requester) until we've refilled.
+			select {
+			case <-ticks:
+				r.refill()
+			}
+		} else {
+			// If we're not empty, refill if there's nothing to do, or drain
+			// the requested amount.
+			select {
+			case <-ticks:
+				r.refill()
+			case amount := <-r.sendchan:
+				r.level -= amount
+				r.waitchan <- r.level
+			}
 		}
 	}
 }
