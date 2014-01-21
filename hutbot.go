@@ -110,6 +110,18 @@ func (i *IRCMessager) callback(cb func(*irc.Event)) func(*irc.Event) {
 	}
 }
 
+func (i *IRCMessager) Connect(conn *irc.Connection) {
+	log.Println("[irc] connecting to", i.Server, i.Channel)
+	conn.Connect(i.Server)
+
+	if len(i.IdentifyPass) > 0 {
+		conn.Privmsg("nickserv", fmt.Sprintf("identify %s %s", i.Nick, i.IdentifyPass))
+	}
+
+	log.Println("[irc] joining")
+	conn.Join(i.Channel)
+}
+
 func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response) {
 	log.Println("[irc] setting up")
 	conn := irc.IRC(i.Nick, i.Nick)
@@ -126,20 +138,20 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 		messages <- Message{i, event.Nick, event.Arguments[0], contents, time.Now()}
 	}))
 	conn.AddCallback("QUIT", i.callback(func(event *irc.Event) {
-		contents := fmt.Sprintf("%s: irc-quit %s", i.Nick, event.Message)
-		messages <- Message{i, event.Nick, i.Channel, contents, time.Now()}
+		if i.Nick == *botName {
+			time.AfterFunc(10*time.Second, func() {
+				log.Println("[irc] re-joining")
+				i.Connect(conn)
+			})
+		} else {
+			contents := fmt.Sprintf("%s: irc-quit %s", i.Nick, event.Message)
+			messages <- Message{i, event.Nick, i.Channel, contents, time.Now()}
+		}
 	}))
 
-	log.Println("[irc ] connecting to", i.Server, i.Channel)
 	conn.UseTLS = i.UseTLS
-	conn.Connect(i.Server)
+	i.Connect(conn)
 
-	if len(i.IdentifyPass) > 0 {
-		conn.Privmsg("nickserv", fmt.Sprintf("identify %s %s", i.Nick, i.IdentifyPass))
-	}
-
-	log.Println("[irc ] joining")
-	conn.Join(i.Channel)
 
 	for response := range responses {
 		if response.Empty() {
