@@ -139,6 +139,7 @@ func (i *IRCMessager) Process(messages chan<- Message, responses <-chan Response
 	}))
 	conn.AddCallback("QUIT", i.callback(func(event *irc.Event) {
 		if i.Nick == *botName {
+			conn.Disconnect()
 			time.AfterFunc(10*time.Second, func() {
 				log.Println("[irc] re-joining")
 				i.Connect(conn)
