@@ -34,6 +34,7 @@ import (
 var botName = flag.String("name", "hutbot", "the bot's nick")
 var botPassword = flag.String("password", "", "the bot's password")
 var botTLS = flag.Bool("tls", true, "whether to use TLS")
+var numWorkers = flag.Int("workers", 4, "process pool size for running commands")
 
 // Messages are created by events (e.g. someone speaking in IRC) and dispatched
 // to responders.
@@ -239,7 +240,9 @@ func (r *RateLimiter) Run() {
 
 // Invokes a .log script for each non-empty response it gets, and ignores the
 // results of the script.
-type ResponseLogger struct{}
+type ResponseLogger struct {
+	Pool Pool
+}
 
 func (r *ResponseLogger) Process(messages chan<- Message, responses <-chan Response) {
 	wd, _ := os.Getwd()
@@ -266,7 +269,7 @@ func (r *ResponseLogger) Process(messages chan<- Message, responses <-chan Respo
 					fmt.Sprintf("HUTBOT_MESSAGE=%s", response.Message.Contents))
 			}
 			for _, path := range paths(".log") {
-				execute(path, "", env)
+				r.Pool.Run(path, "", env, nil)
 			}
 		}
 	}
@@ -276,7 +279,7 @@ func (r *ResponseLogger) Process(messages chan<- Message, responses <-chan Respo
 // results of the script.
 type MessageLogger struct{}
 
-func (m *MessageLogger) Process(messages <-chan Message, responses chan<- Response) {
+func (m *MessageLogger) Process(pool Pool, messages <-chan Message, responses chan<- Response) {
 	wd, _ := os.Getwd()
 	for message := range messages {
 		if message.Empty() {
@@ -292,21 +295,52 @@ func (m *MessageLogger) Process(messages <-chan Message, responses chan<- Respon
 			fmt.Sprintf("HUTBOT_MESSAGE=%s", message.Contents),
 		}
 		for _, path := range paths(".log") {
-			execute(path, "", env)
+			pool.Run(path, "", env, nil)
 		}
 	}
 }
 
 // Responders consume messages and produce responses.
 type Responder interface {
-	Process(<-chan Message, chan<- Response)
+	Process(Pool, <-chan Message, chan<- Response)
+}
+
+// Commands are used internally to send data to a pool of workers, so we can
+// handle running multiple scripts at once.
+type command struct {
+	Path     string
+	Stdin    string
+	Env      []string
+	Callback func([]byte, error)
+}
+
+type Pool chan<- command
+
+func (p Pool) Run(path string, stdin string, env []string, callback func([]byte, error)) {
+	p <- command{path, stdin, env, callback}
+}
+
+func StartWorkers(num int) Pool {
+	commands := make(chan command, 0)
+	worker := func(commands <-chan command) {
+		for command := range commands {
+			out, err := execute(command.Path, command.Stdin, command.Env)
+			if command.Callback != nil {
+				command.Callback(out, err)
+			}
+		}
+	}
+	for i := 0; i < num; i++ {
+		go worker(commands)
+	}
+	return Pool(commands)
 }
 
 // PeriodicScript produces unsolicited responses by periodically running
 // scripts.
 type PeriodicScript struct{}
 
-func (p *PeriodicScript) Process(messages <-chan Message, responses chan<- Response) {
+func (p *PeriodicScript) Process(pool Pool, messages <-chan Message, responses chan<- Response) {
 	ticks1Min := time.Tick(time.Minute)
 	ticks1Hour := time.Tick(time.Hour)
 	ticks1Day := time.Tick(24 * time.Hour)
@@ -320,13 +354,15 @@ func (p *PeriodicScript) Process(messages <-chan Message, responses chan<- Respo
 
 	runScripts := func(dir string) {
 		for _, path := range paths(dir) {
-			if out, err := execute(path, "", env); err == nil {
-				contents := strings.TrimRight(string(out), " \t\r\n")
+			pool.Run(path, "", env, func(out []byte, err error) {
+				var contents string
+				if err == nil {
+					contents = strings.TrimRight(string(out), " \t\r\n")
+				} else {
+					contents = fmt.Sprintf("error: %s %s", path, err)
+				}
 				responses <- Response{p, nil, contents, "", time.Now()}
-			} else {
-				contents := fmt.Sprintf("error: %s %s", path, err)
-				responses <- Response{p, nil, contents, "", time.Now()}
-			}
+			})
 		}
 	}
 
@@ -407,7 +443,7 @@ type PathAndTarget struct {
 	Target string
 }
 
-func (c *CommandScript) Process(messages <-chan Message, responses chan<- Response) {
+func (c *CommandScript) Process(pool Pool, messages <-chan Message, responses chan<- Response) {
 	pattern := regexp.MustCompile(
 		fmt.Sprintf(`%s:\s*([^. \t\r\n]\S*)(\s(.+))?`, *botName))
 
@@ -445,13 +481,15 @@ func (c *CommandScript) Process(messages <-chan Message, responses chan<- Respon
 		pts = appendPaths(pts, paths(".all"), "")
 
 		for _, pt := range pts {
-			if out, err := execute(pt.Path, args, env); err == nil {
-				contents := strings.TrimRight(string(out), " \t\r\n")
-				responses <- Response{c, &message, contents, pt.Target, time.Now()}
-			} else {
-				contents := fmt.Sprintf("error: %s %s", pt.Path, err)
-				responses <- Response{c, &message, contents, "", time.Now()}
-			}
+			pool.Run(pt.Path, args, env, func(out []byte, err error) {
+				if err == nil {
+					contents := strings.TrimRight(string(out), " \t\r\n")
+					responses <- Response{c, &message, contents, pt.Target, time.Now()}
+				} else {
+					contents := fmt.Sprintf("error: %s %s", pt.Path, err)
+					responses <- Response{c, &message, contents, "", time.Now()}
+				}
+			})
 		}
 	}
 }
@@ -474,9 +512,9 @@ func StartMessager(m Messager, messageChan chan<- Message) chan<- Response {
 
 // StartResponder runs the responder in a goroutine and allocates a message
 // channel for dispatching messages to it.
-func StartResponder(r Responder, responseChan chan<- Response) chan<- Message {
+func StartResponder(pool Pool, r Responder, responseChan chan<- Response) chan<- Message {
 	messageChan := make(chan Message)
-	go r.Process(messageChan, responseChan)
+	go r.Process(pool, messageChan, responseChan)
 	return messageChan
 }
 
@@ -495,6 +533,9 @@ func main() {
 	botServer := flag.Arg(0)
 	botChannel := flag.Arg(1)
 
+	// Start a worker pool.
+	pool := StartWorkers(*numWorkers)
+
 	// Set up messagers.
 	messages := make(chan Message, 4096)
 	messagers := []Messager{
@@ -506,7 +547,7 @@ func main() {
 			IdentifyPass: *botPassword,
 		},
 		&StreamMessager{Reader: os.Stdin},
-		&ResponseLogger{},
+		&ResponseLogger{pool},
 	}
 	responseChans := []chan<- Response{}
 	for _, messager := range messagers {
@@ -522,7 +563,7 @@ func main() {
 	}
 	messageChans := []chan<- Message{}
 	for _, responder := range responders {
-		messageChans = append(messageChans, StartResponder(responder, responses))
+		messageChans = append(messageChans, StartResponder(pool, responder, responses))
 	}
 
 	// Dispatch responses back to all messagers.
