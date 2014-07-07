@@ -481,10 +481,11 @@ func (c *CommandScript) Process(pool Pool, messages <-chan Message, responses ch
 		pts = appendPaths(pts, paths(".all"), "")
 
 		for _, pt := range pts {
+			target := pt.Target
 			pool.Run(pt.Path, args, env, func(out []byte, err error) {
 				if err == nil {
 					contents := strings.TrimRight(string(out), " \t\r\n")
-					responses <- Response{c, &message, contents, pt.Target, time.Now()}
+					responses <- Response{c, &message, contents, target, time.Now()}
 				} else {
 					contents := fmt.Sprintf("error: %s %s", pt.Path, err)
 					responses <- Response{c, &message, contents, "", time.Now()}
