@@ -354,12 +354,13 @@ func (p *PeriodicScript) Process(pool Pool, messages <-chan Message, responses c
 
 	runScripts := func(dir string) {
 		for _, path := range paths(dir) {
+			executable := path
 			pool.Run(path, "", env, func(out []byte, err error) {
 				var contents string
 				if err == nil {
 					contents = strings.TrimRight(string(out), " \t\r\n")
 				} else {
-					contents = fmt.Sprintf("error: %s %s", path, err)
+					contents = fmt.Sprintf("error: %s %s", executable, err)
 				}
 				responses <- Response{p, nil, contents, "", time.Now()}
 			})
@@ -482,12 +483,13 @@ func (c *CommandScript) Process(pool Pool, messages <-chan Message, responses ch
 
 		for _, pt := range pts {
 			target := pt.Target
+			executable := pt.Path
 			pool.Run(pt.Path, args, env, func(out []byte, err error) {
 				if err == nil {
 					contents := strings.TrimRight(string(out), " \t\r\n")
 					responses <- Response{c, &message, contents, target, time.Now()}
 				} else {
-					contents := fmt.Sprintf("error: %s %s", pt.Path, err)
+					contents := fmt.Sprintf("error: %s %s", executable, err)
 					responses <- Response{c, &message, contents, "", time.Now()}
 				}
 			})
