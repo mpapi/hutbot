@@ -311,12 +311,12 @@ type command struct {
 	Path     string
 	Stdin    string
 	Env      []string
-	Callback func([]byte, error)
+	Callback func([]byte, []byte, error)
 }
 
 type Pool chan<- command
 
-func (p Pool) Run(path string, stdin string, env []string, callback func([]byte, error)) {
+func (p Pool) Run(path string, stdin string, env []string, callback func([]byte, []byte, error)) {
 	p <- command{path, stdin, env, callback}
 }
 
@@ -324,9 +324,9 @@ func StartWorkers(num int) Pool {
 	commands := make(chan command, 0)
 	worker := func(commands <-chan command) {
 		for command := range commands {
-			out, err := execute(command.Path, command.Stdin, command.Env)
+			stdout, stderr, err := execute(command.Path, command.Stdin, command.Env)
 			if command.Callback != nil {
-				command.Callback(out, err)
+				command.Callback(stdout, stderr, err)
 			}
 		}
 	}
@@ -355,12 +355,12 @@ func (p *PeriodicScript) Process(pool Pool, messages <-chan Message, responses c
 	runScripts := func(dir string) {
 		for _, path := range paths(dir) {
 			executable := path
-			pool.Run(path, "", env, func(out []byte, err error) {
+			pool.Run(path, "", env, func(stdout []byte, stderr []byte, err error) {
 				var contents string
 				if err == nil {
-					contents = strings.TrimRight(string(out), " \t\r\n")
+					contents = strings.TrimRight(string(stdout), " \t\r\n")
 				} else {
-					contents = fmt.Sprintf("error: %s %s", executable, err)
+					contents = fmt.Sprintf("error: %s %s: %s", executable, err, string(stderr))
 				}
 				responses <- Response{p, nil, contents, "", time.Now()}
 			})
@@ -432,11 +432,15 @@ func isExec(f os.FileInfo) bool {
 
 // Run the script at `path`, passing it `stdin` and using environment vars
 // `env`. Returns stdout and any error that occurred.
-func execute(path string, stdin string, env []string) ([]byte, error) {
+func execute(path string, stdin string, env []string) ([]byte, []byte, error) {
 	cmd := exec.Command(path)
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader([]byte(stdin))
-	return cmd.Output()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 type PathAndTarget struct {
@@ -484,12 +488,12 @@ func (c *CommandScript) Process(pool Pool, messages <-chan Message, responses ch
 		for _, pt := range pts {
 			target := pt.Target
 			executable := pt.Path
-			pool.Run(pt.Path, args, env, func(out []byte, err error) {
+			pool.Run(pt.Path, args, env, func(stdout []byte, stderr []byte, err error) {
 				if err == nil {
-					contents := strings.TrimRight(string(out), " \t\r\n")
+					contents := strings.TrimRight(string(stdout), " \t\r\n")
 					responses <- Response{c, &message, contents, target, time.Now()}
 				} else {
-					contents := fmt.Sprintf("error: %s %s", executable, err)
+					contents := fmt.Sprintf("error: %s %s: %s", executable, err, string(stderr))
 					responses <- Response{c, &message, contents, "", time.Now()}
 				}
 			})
