@@ -105,7 +105,7 @@ type IRCMessager struct {
 func (i *IRCMessager) callback(cb func(*irc.Event)) func(*irc.Event) {
 	return func(event *irc.Event) {
 		log.Println("[irc]", event.Code, event, event.Message(), event.Arguments, event.Nick)
-		if len(event.Arguments) == 0 || event.Arguments[0] == i.Channel {
+		if len(event.Arguments) == 0 || event.Arguments[0] == i.Channel || event.Code == "QUIT" {
 			cb(event)
 		}
 	}
